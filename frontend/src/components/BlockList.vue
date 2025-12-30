@@ -4,8 +4,8 @@
             <h1>Blockchain Visualization</h1>
             <div class="header-right">
                 <div class="node-info">
-                    <span class="label">当前节点：</span>
-                    <span class="current-node">P2P未知</span>
+                    <span class="label">当前节点:</span>
+                    <span class="current-node">P2P {{ getCurrentNodeP2pPort() }}</span>
                 </div>
                 <div class="status">
                     <span :class="['status-dot', connected ? 'online' : 'offline']"></span>
@@ -13,33 +13,33 @@
                 </div>
             </div>
         </div>
-       
         <div class="node-selector-bar">
             <div class="selector-left">
-                <span class="label">可用节点：</span>
-                <button
-                    v-for="node in availableNodes"
-                    :key="node.airPort"
-                    @click="switchToNode(node)"
-                    :class="['node-btn', { active: currentApiPort === node.airPort }]"
-                    :title="`api端口：${node.airPort}, 区块数：${node.blockCount}`"
-                >
-                    <div class="node-id">节点：</div>
-                    <div class="node-blocks">区块</div>
+                <span class="label">可用节点:</span>
+                <button v-for="node in availableNodes" :key="node.apiPort" @click="switchToNode(node)"
+                    :class="['node-btn', { active: currentApiPort === node.apiPort }]"
+                    :title="`API端口: ${node.apiPort}, 区块数: ${node.blockCount}`">
+                    <div class="node-id">节点 {{ node.p2pPort }}</div>
+                    <div class="node-blocks">{{ node.blockCount }} 区块</div>
                 </button>
-                <div v-if="availableNodes.length === 0 && !isDiscovering" class="no-nodes">未发现节点</div>
-                <div v-if="isDiscovering" class="discovering">扫描中....</div>
+                <div v-if="availableNodes.length === 0 && !isDiscovering" class="no-nodes">
+                    未发现节点
+                </div>
+                <div v-if="isDiscovering" class="discovering">
+                    扫描中...
+                </div>
             </div>
-            <button @click="discoverNodes" class="refresh-nodes-btn" :disabled="isDiscovering">刷新节点</button>
+            <button @click="discoverNodes" class="refresh-nodes-btn" :disabled="isDiscovering">
+                刷新节点
+            </button>
         </div>
-         <div class="controls">
+        <div class="controls">
             <button @click="fetchBlocks" class="refresh-btn">
                 Refresh Chain
             </button>
             <div class="auto-refresh">
                 <label>
-                    <input type="checkbox" v-model="autoRefresh"></input>
-                    Auto Refresh(2s)
+                    <input type="checkbox" v-model="autoRefresh"> Auto Refresh(2s)
                 </label>
             </div>
         </div>
@@ -49,7 +49,7 @@
                 <div class="block-card">
                     <div class="block-header">
                         <span class="block-index">#{{ block.index }}</span>
-                        <span class="block-time">{{ block.timestamp }}</span>
+                        <span class="block-time">{{ formatTime(block.timestamp) }}</span>
                     </div>
                     <div class="block-body">
                         <div class="data-row">
@@ -58,7 +58,7 @@
                         </div>
                         <div class="data-row">
                             <span class="label">Prev Hash:</span>
-                            <span class="value hash">{{ block.previousHash }}</span>
+                            <span class="value hash" :title="block.previousHash">{{ block.previousHash }}</span>
                         </div>
                         <div class="data-row">
                             <span class="label">Data:</span>
@@ -79,51 +79,106 @@
             Waiting for blockchain data...
         </div>
     </div>
-   
+
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
+import axios from 'axios';
+import dayjs from 'dayjs';
+
+const availableNodes = ref([]); // 可用的节点列表
+const currentApiPort = ref(3001); // 当前连接的API端口
+const blocks = ref([]);
 const connected = ref(false);
-const availableNodes = ref([]);
-const currentApiPort = ref(3001);
-const blocks = ref([
-    {
-        index: 0,
-        previousHash: "0",
-        timestamp: 1508270000000,
-        data: "first block",
-        hash: "000dc75a315c77a1f9c98fb6247d03dd18ac52632d7dc6a9920261d8109b37cf",
-        nonce: 604
-    },
-    {
-        index: 1,
-        previousHash: "000dc75a315c77a1f9c98fb6247d03dd18ac52632d7dc6a9920261d8109b37cf",
-        timestamp: 1733244720000,
-        data: "Hello Blockchain!",
-        hash: "000a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a",
-        nonce: 1234
-    },
-    {
-        index: 2,
-        previousHash: "000a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a",
-        timestamp: 1733244820000,
-        data: "Second block data",
-        hash: "000b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
-        nonce: 5678
-    },
-    {
-        index: 3,
-        previousHash: "000b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
-        timestamp: 1733244920000,
-        data: "Transaction data: Alice -> Bob: 100 BTC",
-        hash: "000c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c",
-        nonce: 9012
-    }
-]);
 const autoRefresh = ref(true);
 const isDiscovering = ref(false);
 let timer = null;
+
+// 扫描指定端口, 检查是否有节点在运行
+const scanPort = async (port) => {
+    try {
+        const response = await axios.get(`http://localhost:${port}/nodeinfo`, { timeout: 1000 });
+        return {
+            apiPort: port,
+            p2pPort: response.data.p2pPort,
+            blockCount: response.data.blockCount,
+            online: true
+        };
+    } catch (error) {
+        return null;
+    }
+};
+
+// 发现网络中的所有节点
+const discoverNodes = async () => {
+    isDiscovering.value = true;
+    const portRange = [3001, 3002, 3003, 3004, 3005]; // 扫描的端口范围
+    const promises = portRange.map(port => scanPort(port));
+    const results = await Promise.all(promises);
+
+    // 过滤掉null值 (不可用的端口)
+    availableNodes.value = results.filter(node => node !== null);
+    isDiscovering.value = false;
+
+    console.log('发现的节点:', availableNodes.value);
+};
+
+// 获取区块链数据
+const fetchBlocks = async () => {
+    try {
+        const response = await axios.get(`http://localhost:${currentApiPort.value}/blocks`);
+        blocks.value = response.data;
+        connected.value = true;
+    } catch (error) {
+        console.error('Error fetching blocks:', error);
+        connected.value = false;
+    }
+};
+// 切换到指定节点
+const switchToNode = (node) => {
+    currentApiPort.value = node.apiPort;
+    fetchBlocks();
+};
+
+// 获取当前节点的P2p端口（用于显示）
+const getCurrentNodeP2pPort = () => {
+    const currentNode = availableNodes.value.find(n => n.apiPort === currentApiPort.value);
+    return currentNode?.p2pPort || '未知';
+};
+
+const formatTime = (timestamp) => {
+    return dayjs(timestamp * 1000).format('YYYY-MM-DD HH:mm:ss');
+};
+
+const startPolling = () => {
+    if (timer) clearInterval(timer);
+    timer = setInterval(fetchBlocks, 2000);
+};
+
+const stopPolling = () => {
+    if (timer) clearInterval(timer);
+};
+
+watch(autoRefresh, (newValue) => {
+    if (newValue) {
+        startPolling();
+    } else {
+        stopPolling();
+    }
+});
+
+onMounted(async () => {
+    await discoverNodes(); // 先发现可用节点
+    fetchBlocks(); // 然后获取区块数据
+    if (autoRefresh.value) {
+        startPolling();
+    }
+});
+
+onUnmounted(() => {
+    stopPolling();
+});
 </script>
 <style scoped>
 .blockchain-container {
@@ -132,6 +187,7 @@ let timer = null;
     padding: 20px;
     font-family: 'Inter', sans-serif;
 }
+
 .header {
     display: flex;
     justify-content: space-between;
@@ -140,16 +196,19 @@ let timer = null;
     border-bottom: 1px solid #eee;
     padding-bottom: 20px;
 }
+
 .header-right {
     display: flex;
     align-items: center;
     gap: 20px;
 }
+
 h1 {
     margin: 0;
     color: #2c3e50;
     font-size: 24px;
 }
+
 .node-info {
     display: flex;
     align-items: center;
@@ -158,21 +217,25 @@ h1 {
     background: #f8f9fa;
     border-radius: 6px;
 }
+
 .node-info .label {
     font-size: 13px;
     color: #666;
 }
+
 .current-node {
     font-weight: 600;
     color: #667eea;
     font-family: 'Roboto', sans-serif;
 }
+
 .status {
     display: flex;
     align-items: center;
     font-size: 14px;
     color: #666;
 }
+
 .status-dot {
     width: 10px;
     height: 10px;
@@ -180,6 +243,7 @@ h1 {
     margin-right: 8px;
     background-color: #f41616;
 }
+
 .status-dot.online {
     background-color: #42b983;
     box-shadow: 0 0 8px rgba(66, 185, 131, 0.5);
@@ -188,6 +252,7 @@ h1 {
 .status-dot.offine {
     background-color: #f7422e;
 }
+
 .node-selector-bar {
     display: flex;
     justify-content: space-between;
@@ -201,6 +266,7 @@ h1 {
     gap: 15px;
     flex-wrap: wrap;
 }
+
 .selector-left {
     display: flex;
     align-items: center;
@@ -208,11 +274,13 @@ h1 {
     flex: 1;
     flex-wrap: wrap;
 }
+
 .selector-left .label {
     font-size: 14px;
     color: #666;
     font-weight: 500;
 }
+
 .node-btn {
     padding: 8px 14px;
     border: 2px solid #e0e0e0;
@@ -225,34 +293,42 @@ h1 {
     align-items: center;
     gap: 2px;
 }
+
 .node-btn:hover {
     border-color: #667eea;
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
 }
+
 .node-btn.active {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border-color: #667eea;
     color: white;
     box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
 }
+
 .node-id {
     font-size: 13px;
     font-weight: 600;
 }
+
 .node-blocks {
     font-size: 11px;
     opacity: 0.8;
 }
-.no-nodes, .discovering {
+
+.no-nodes,
+.discovering {
     font-size: 13px;
     color: #999;
     font-style: italic;
     padding: 8px 12px;
 }
+
 .discovering {
     color: #667eea;
 }
+
 .refresh-nodes-btn {
     padding: 8px 16px;
     background: #667eea;
@@ -264,25 +340,30 @@ h1 {
     transition: all 0.3s ease;
     white-space: nowrap;
 }
+
 .refresh-nodes-btn:hover:not(:disabled) {
     background: #5568d3;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
+
 .refresh-nodes-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
 .refresh-nodes-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
 .controls {
     margin-bottom: 30px;
     display: flex;
     align-items: center;
     gap: 20px;
 }
+
 .refresh-btn {
     background-color: #3498db;
     color: white;
@@ -292,9 +373,11 @@ h1 {
     cursor: pointer;
     transition: background-color 0.3s;
 }
+
 .refresh-btn:hover {
     background-color: #2980b9;
 }
+
 .chain-display {
     display: flex;
     flex-direction: column;
@@ -363,33 +446,34 @@ h1 {
     color: #888;
     flex-shrink: 0;
 }
+
 .value {
-  color: #333;
-  word-break: break-all;
+    color: #333;
+    word-break: break-all;
 }
 
 .data-content {
-  font-weight: bold;
-  color: #2c3e50;
+    font-weight: bold;
+    color: #2c3e50;
 }
 
 .hash {
-  color: #e67e22;
+    color: #e67e22;
 }
 
 .chain-link {
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #ccc;
-  font-size: 24px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ccc;
+    font-size: 24px;
 }
 
 .empty-state {
-  text-align: center;
-  padding: 40px;
-  color: #999;
-  font-style: italic;
+    text-align: center;
+    padding: 40px;
+    color: #999;
+    font-style: italic;
 }
 </style>
